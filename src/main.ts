@@ -177,16 +177,11 @@ const render = () => {
   stats.end();
 };
 
-const animate = () => {
-  render();
-  requestAnimationFrame(animate);
-};
-
 const init = async () => {
   renderer = await createRenderer();
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setAnimationLoop(animate);
+  renderer.setAnimationLoop(render);
   renderer.domElement.classList.add("app-canvas");
   canvas.replaceWith(renderer.domElement);
 
