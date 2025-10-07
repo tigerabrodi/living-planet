@@ -1,5 +1,7 @@
 import { createNoise4D } from "simplex-noise";
-import { Vector3 } from "three";
+import { DataTexture, Vector3, WebGLRenderer } from "three";
+import { GPUComputationRenderer } from "three/examples/jsm/misc/GPUComputationRenderer.js";
+import { densityComputeShader } from "./shaders/densityCompute.glsl";
 
 export interface DensityFieldSettings {
   size: number;
@@ -13,6 +15,27 @@ export interface DensityFieldSettings {
 }
 
 export type DensityFieldMode = "terrain" | "sphere";
+
+interface DensityFieldGPUState {
+  compute: GPUComputationRenderer;
+  variable: ReturnType<GPUComputationRenderer["addVariable"]>;
+  texture: DataTexture;
+  uniforms: {
+    time: { value: number };
+    frequency: { value: number };
+    amplitude: { value: number };
+    persistence: { value: number };
+    lacunarity: { value: number };
+    ridgeSharpness: { value: number };
+    timeScale: { value: number };
+    octaves: { value: number };
+    size: { value: number };
+    mode: { value: number };
+  };
+  width: number;
+  height: number;
+  buffer: Float32Array;
+}
 
 const defaultSettings: DensityFieldSettings = {
   size: 48,
@@ -30,6 +53,8 @@ export interface DensityFieldState {
   values: Float32Array;
   size: number;
   mode: DensityFieldMode;
+  gpu?: DensityFieldGPUState;
+  gpuUnavailable?: boolean;
 }
 
 const noise4D = createNoise4D();
@@ -80,11 +105,132 @@ export const createDensityField = (
   };
 };
 
+export const initDensityFieldGPU = (
+  state: DensityFieldState,
+  renderer: WebGLRenderer
+) => {
+  if (state.gpu || state.gpuUnavailable) {
+    return;
+  }
+
+  const size = state.size;
+  const width = size;
+  const height = size * size;
+
+  try {
+    const compute = new GPUComputationRenderer(width, height, renderer);
+    const texture = compute.createTexture();
+    const data = texture.image.data as Float32Array;
+
+    for (let i = 0; i < state.values.length; i++) {
+      data[i * 4] = state.values[i];
+    }
+
+    const variable = compute.addVariable(
+      "textureDensity",
+      densityComputeShader,
+      texture
+    );
+
+    const rawUniforms = {
+      time: { value: 0 },
+      frequency: { value: state.settings.frequency },
+      amplitude: { value: state.settings.amplitude },
+      persistence: { value: state.settings.persistence },
+      lacunarity: { value: state.settings.lacunarity },
+      ridgeSharpness: { value: state.settings.ridgeSharpness },
+      timeScale: { value: state.settings.timeScale },
+      octaves: { value: state.settings.octaves },
+      size: { value: state.size },
+      mode: { value: state.mode === "sphere" ? 0 : 1 },
+    };
+
+    variable.material.uniforms = rawUniforms as Record<
+      string,
+      { value: number }
+    >;
+    compute.setVariableDependencies(variable, [variable]);
+
+    const error = compute.init();
+    if (error) {
+      console.warn("GPUComputationRenderer init failed", error);
+      state.gpuUnavailable = true;
+      return;
+    }
+
+    state.gpu = {
+      compute,
+      variable,
+      texture,
+      uniforms: rawUniforms as DensityFieldGPUState["uniforms"],
+      width,
+      height,
+      buffer: new Float32Array(width * height * 4),
+    };
+  } catch (error) {
+    console.warn("Failed to initialize GPU density field", error);
+    state.gpuUnavailable = true;
+  }
+};
+
 export const updateDensityField = (
   state: DensityFieldState,
   elapsed: number,
-  mode: DensityFieldMode = state.mode
-) => {
+  mode: DensityFieldMode = state.mode,
+  renderer?: WebGLRenderer
+): void => {
+  state.mode = mode;
+
+  const useGPU = renderer && !state.gpuUnavailable;
+  if (useGPU) {
+    let gpuState = state.gpu;
+    if (!gpuState) {
+      initDensityFieldGPU(state, renderer!);
+      gpuState = state.gpu;
+      if (!gpuState) {
+        state.gpuUnavailable = true;
+      }
+    }
+
+    if (gpuState && renderer) {
+      const uniforms = gpuState.uniforms;
+      uniforms.time.value = elapsed;
+      uniforms.frequency.value = state.settings.frequency;
+      uniforms.amplitude.value = state.settings.amplitude;
+      uniforms.persistence.value = state.settings.persistence;
+      uniforms.lacunarity.value = state.settings.lacunarity;
+      uniforms.ridgeSharpness.value = state.settings.ridgeSharpness;
+      uniforms.timeScale.value = state.settings.timeScale;
+      uniforms.octaves.value = state.settings.octaves;
+      uniforms.size.value = state.size;
+      uniforms.mode.value = mode === "sphere" ? 0 : 1;
+
+      const compute = gpuState.compute;
+      const variable = gpuState.variable;
+      const width = gpuState.width;
+      const height = gpuState.height;
+      const buffer = gpuState.buffer;
+
+      compute.compute();
+
+      renderer.readRenderTargetPixels(
+        compute.getCurrentRenderTarget(variable),
+        0,
+        0,
+        width,
+        height,
+        buffer
+      );
+
+      const values = state.values;
+      const total = values.length;
+      for (let i = 0; i < total; i++) {
+        values[i] = buffer[i * 4];
+      }
+      return;
+    }
+  }
+
   const { size, values, settings } = state;
   const half = size / 2;
 
@@ -101,13 +247,12 @@ export const updateDensityField = (
           const base = fbm(scratch.x, scratch.y, scratch.z, settings, elapsed);
           const ridged = ridge(base, settings.ridgeSharpness);
 
-          const gradient = -scratch.y * 1.2; // Pull density downwards to create "ground" level.
+          const gradient = -scratch.y * 1.2;
           values[index++] = ridged + gradient;
         }
       }
     }
   }
-  state.mode = mode;
 };
 
 export const indexOf = (

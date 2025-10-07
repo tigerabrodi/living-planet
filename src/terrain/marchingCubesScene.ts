@@ -18,6 +18,7 @@ import { edgeTable, triTable } from "../tables";
 import {
   createDensityField,
   indexOf,
+  initDensityFieldGPU,
   updateDensityField,
   type DensityFieldMode,
   type DensityFieldSettings,
@@ -418,7 +419,16 @@ export const createMarchingCubesScene = (options: {
   regenerate(true);
 
   const render = ({ renderer, elapsed }: RenderContext) => {
-    updateDensityField(densityState, elapsed, params.debugShape);
+    if (!densityState.gpuUnavailable) {
+      initDensityFieldGPU(densityState, renderer);
+    }
+
+    updateDensityField(
+      densityState,
+      elapsed,
+      params.debugShape,
+      densityState.gpuUnavailable ? undefined : renderer
+    );
     generateMesh(densityState, 0, geometry);
     controls.update();
     renderer.render(scene, camera);
