@@ -26,10 +26,17 @@ canvas {
   display: block;
 }
 
-.stats-panel {
+.stats-panel,
+.gui-panel {
   position: fixed;
   top: 0.5rem;
   left: 0.5rem;
   z-index: 10;
   pointer-events: none;
+}
+
+.gui-panel {
+  left: auto;
+  right: 0.5rem;
+  pointer-events: auto;
 }
