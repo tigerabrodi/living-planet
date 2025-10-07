@@ -12,6 +12,8 @@ export interface DensityFieldSettings {
   timeScale: number;
 }
 
+export type DensityFieldMode = "terrain" | "sphere";
+
 const defaultSettings: DensityFieldSettings = {
   size: 48,
   frequency: 0.1,
@@ -27,6 +29,7 @@ export interface DensityFieldState {
   settings: DensityFieldSettings;
   values: Float32Array;
   size: number;
+  mode: DensityFieldMode;
 }
 
 const noise4D = createNoise4D();
@@ -64,7 +67,8 @@ const ridge = (value: number, sharpness: number) => {
 };
 
 export const createDensityField = (
-  settings: Partial<DensityFieldSettings> = {}
+  settings: Partial<DensityFieldSettings> = {},
+  mode: DensityFieldMode = "terrain"
 ): DensityFieldState => {
   const merged = { ...defaultSettings, ...settings };
   const size = merged.size;
@@ -72,12 +76,14 @@ export const createDensityField = (
     settings: merged,
     values: new Float32Array(size * size * size),
     size,
+    mode,
   };
 };
 
 export const updateDensityField = (
   state: DensityFieldState,
-  elapsed: number
+  elapsed: number,
+  mode: DensityFieldMode = state.mode
 ) => {
   const { size, values, settings } = state;
   const half = size / 2;
@@ -88,14 +94,20 @@ export const updateDensityField = (
       for (let x = 0; x < size; x++) {
         scratch.set((x - half) / size, (y - half) / size, (z - half) / size);
 
-        const base = fbm(scratch.x, scratch.y, scratch.z, settings, elapsed);
-        const ridged = ridge(base, settings.ridgeSharpness);
+        if (mode === "sphere") {
+          const radius = 0.35;
+          values[index++] = scratch.length() - radius;
+        } else {
+          const base = fbm(scratch.x, scratch.y, scratch.z, settings, elapsed);
+          const ridged = ridge(base, settings.ridgeSharpness);
 
-        const gradient = -scratch.y * 1.2; // Pull density downwards to create "ground" level.
-        values[index++] = ridged + gradient;
+          const gradient = -scratch.y * 1.2; // Pull density downwards to create "ground" level.
+          values[index++] = ridged + gradient;
+        }
       }
     }
   }
+  state.mode = mode;
 };
 
 export const indexOf = (

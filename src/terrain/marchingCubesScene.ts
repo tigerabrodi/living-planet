@@ -19,6 +19,7 @@ import {
   createDensityField,
   indexOf,
   updateDensityField,
+  type DensityFieldMode,
   type DensityFieldSettings,
   type DensityFieldState,
 } from "./densityField";
@@ -33,6 +34,7 @@ interface MarchingParams {
   ridgeSharpness: number;
   timeScale: number;
   regenerate: () => void;
+  debugShape: DensityFieldMode;
 }
 
 const voxelVertices: number[] = [];
@@ -344,6 +346,7 @@ export const createMarchingCubesScene = (options: {
     ridgeSharpness: densityState.settings.ridgeSharpness,
     timeScale: densityState.settings.timeScale,
     regenerate: () => regenerate(true),
+    debugShape: densityState.mode,
   };
 
   const folder = gui.addFolder("Marching Terrain");
@@ -383,6 +386,13 @@ export const createMarchingCubesScene = (options: {
     .add(params, "timeScale", 0.0, 1.0, 0.05)
     .name("Time Scale")
     .onFinishChange(() => regenerate(false));
+  folder
+    .add({ sphere: false }, "sphere")
+    .name("Debug Sphere")
+    .onChange((useSphere: boolean) => {
+      params.debugShape = useSphere ? "sphere" : "terrain";
+      regenerate(true);
+    });
   folder.add(params, "regenerate").name("Rebuild Now");
   folder.close();
 
@@ -400,7 +410,7 @@ export const createMarchingCubesScene = (options: {
     // If we force a rebuild with different resolution we'd recreate state; for now, just update settings.
     Object.assign(densityState.settings, settings);
     if (hard) {
-      updateDensityField(densityState, 0);
+      updateDensityField(densityState, 0, params.debugShape);
       generateMesh(densityState, 0, geometry);
     }
   };
@@ -408,7 +418,7 @@ export const createMarchingCubesScene = (options: {
   regenerate(true);
 
   const render = ({ renderer, elapsed }: RenderContext) => {
-    updateDensityField(densityState, elapsed);
+    updateDensityField(densityState, elapsed, params.debugShape);
     generateMesh(densityState, 0, geometry);
     controls.update();
     renderer.render(scene, camera);
