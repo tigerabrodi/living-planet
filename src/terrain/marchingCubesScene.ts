@@ -9,6 +9,8 @@ import {
   MeshStandardMaterial,
   PerspectiveCamera,
   Scene,
+  Uint16BufferAttribute,
+  Uint32BufferAttribute,
   Vector2,
   Vector3,
 } from "three";
@@ -24,6 +26,7 @@ import {
   type DensityFieldSettings,
   type DensityFieldState,
 } from "./densityField";
+import { createHeightmap, regenerateHeightmap } from "./heightmap";
 
 interface MarchingParams {
   wireframe: boolean;
@@ -36,6 +39,12 @@ interface MarchingParams {
   timeScale: number;
   regenerate: () => void;
   debugShape: DensityFieldMode;
+  useHeightmap: boolean;
+  heightFrequency: number;
+  heightAmplitude: number;
+  heightOctaves: number;
+  heightPersistence: number;
+  heightLacunarity: number;
 }
 
 const voxelVertices: number[] = [];
@@ -287,6 +296,65 @@ const generateMesh = (
   geometry.computeBoundingBox();
 };
 
+const generateMeshFromHeightmap = (
+  heightmap: ReturnType<typeof createHeightmap>,
+  geometry: BufferGeometry
+) => {
+  geometry.dispose();
+  geometry.copy(new BufferGeometry());
+
+  const { values, settings } = heightmap;
+  const { width, height } = settings;
+
+  const vertexCount = width * height;
+  const positions = new Float32Array(vertexCount * 3);
+  const indicesCount = (width - 1) * (height - 1) * 6;
+  const useUint32 = vertexCount > 65535;
+  const indexArray = useUint32
+    ? new Uint32Array(indicesCount)
+    : new Uint16Array(indicesCount);
+
+  let ptr = 0;
+  const scaleX = width - 1;
+  const scaleZ = height - 1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const value = values[y * width + x];
+      positions[ptr++] = (x / scaleX - 0.5) * scaleX;
+      positions[ptr++] = value;
+      positions[ptr++] = (y / scaleZ - 0.5) * scaleZ;
+    }
+  }
+
+  let indexPtr = 0;
+  for (let y = 0; y < height - 1; y++) {
+    for (let x = 0; x < width - 1; x++) {
+      const a = x + y * width;
+      const b = x + 1 + y * width;
+      const c = x + (y + 1) * width;
+      const d = x + 1 + (y + 1) * width;
+
+      indexArray[indexPtr++] = a;
+      indexArray[indexPtr++] = c;
+      indexArray[indexPtr++] = b;
+
+      indexArray[indexPtr++] = b;
+      indexArray[indexPtr++] = c;
+      indexArray[indexPtr++] = d;
+    }
+  }
+
+  geometry.setAttribute("position", new BufferAttribute(positions, 3));
+  geometry.setIndex(
+    useUint32
+      ? new Uint32BufferAttribute(indexArray, 1)
+      : new Uint16BufferAttribute(indexArray, 1)
+  );
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+};
+
 export const createMarchingCubesScene = (options: {
   gui: GUI;
   canvas: HTMLCanvasElement;
@@ -295,6 +363,8 @@ export const createMarchingCubesScene = (options: {
   const { gui, canvas } = options;
 
   const densityState = createDensityField({ size: 48 });
+  const heightmap = createHeightmap();
+  regenerateHeightmap(heightmap);
   const scene = new Scene();
   scene.background = new Color("#12141a");
 
@@ -348,6 +418,12 @@ export const createMarchingCubesScene = (options: {
     timeScale: densityState.settings.timeScale,
     regenerate: () => regenerate(true),
     debugShape: densityState.mode,
+    useHeightmap: false,
+    heightFrequency: heightmap.settings.frequency,
+    heightAmplitude: heightmap.settings.amplitude,
+    heightOctaves: heightmap.settings.octaves,
+    heightPersistence: heightmap.settings.persistence,
+    heightLacunarity: heightmap.settings.lacunarity,
   };
 
   const folder = gui.addFolder("Marching Terrain");
@@ -394,6 +470,72 @@ export const createMarchingCubesScene = (options: {
       params.debugShape = useSphere ? "sphere" : "terrain";
       regenerate(true);
     });
+  folder
+    .add(params, "useHeightmap")
+    .name("Use Heightmap")
+    .onChange((value: boolean) => {
+      params.useHeightmap = value;
+      if (value) {
+        regenerateHeightmap(heightmap);
+        generateMeshFromHeightmap(heightmap, geometry);
+        mesh.position.set(0, 0, 0);
+      } else {
+        mesh.position.set(
+          -densityState.size * 0.5,
+          -densityState.size * 0.45,
+          -densityState.size * 0.5
+        );
+        regenerate(true);
+      }
+    });
+
+  const heightFolder = folder.addFolder("Heightmap");
+  heightFolder
+    .add(params, "heightFrequency", 0.2, 5, 0.1)
+    .name("Frequency")
+    .onFinishChange(() => {
+      heightmap.settings.frequency = params.heightFrequency;
+      regenerateHeightmap(heightmap);
+      generateMeshFromHeightmap(heightmap, geometry);
+      regenerate(true);
+    });
+  heightFolder
+    .add(params, "heightAmplitude", 1, 20, 0.5)
+    .name("Amplitude")
+    .onFinishChange(() => {
+      heightmap.settings.amplitude = params.heightAmplitude;
+      regenerateHeightmap(heightmap);
+      generateMeshFromHeightmap(heightmap, geometry);
+      regenerate(true);
+    });
+  heightFolder
+    .add(params, "heightOctaves", 1, 6, 1)
+    .name("Octaves")
+    .onFinishChange(() => {
+      heightmap.settings.octaves = params.heightOctaves;
+      regenerateHeightmap(heightmap);
+      generateMeshFromHeightmap(heightmap, geometry);
+      regenerate(true);
+    });
+  heightFolder
+    .add(params, "heightPersistence", 0.2, 0.9, 0.05)
+    .name("Persistence")
+    .onFinishChange(() => {
+      heightmap.settings.persistence = params.heightPersistence;
+      regenerateHeightmap(heightmap);
+      generateMeshFromHeightmap(heightmap, geometry);
+      regenerate(true);
+    });
+  heightFolder
+    .add(params, "heightLacunarity", 1.5, 3.5, 0.1)
+    .name("Lacunarity")
+    .onFinishChange(() => {
+      heightmap.settings.lacunarity = params.heightLacunarity;
+      regenerateHeightmap(heightmap);
+      generateMeshFromHeightmap(heightmap, geometry);
+      regenerate(true);
+    });
+  heightFolder.close();
   folder.add(params, "regenerate").name("Rebuild Now");
   folder.close();
 
@@ -408,8 +550,14 @@ export const createMarchingCubesScene = (options: {
       timeScale: params.timeScale,
     };
 
-    // If we force a rebuild with different resolution we'd recreate state; for now, just update settings.
     Object.assign(densityState.settings, settings);
+
+    if (params.useHeightmap) {
+      regenerateHeightmap(heightmap);
+      generateMeshFromHeightmap(heightmap, geometry);
+      return;
+    }
+
     if (hard) {
       updateDensityField(densityState, 0, params.debugShape);
       generateMesh(densityState, 0, geometry);
@@ -423,13 +571,18 @@ export const createMarchingCubesScene = (options: {
       initDensityFieldGPU(densityState, renderer);
     }
 
-    updateDensityField(
-      densityState,
-      elapsed,
-      params.debugShape,
-      densityState.gpuUnavailable ? undefined : renderer
-    );
-    generateMesh(densityState, 0, geometry);
+    if (params.useHeightmap) {
+      generateMeshFromHeightmap(heightmap, geometry);
+    } else {
+      updateDensityField(
+        densityState,
+        elapsed,
+        params.debugShape,
+        densityState.gpuUnavailable ? undefined : renderer
+      );
+      generateMesh(densityState, 0, geometry);
+    }
+
     controls.update();
     renderer.render(scene, camera);
   };
