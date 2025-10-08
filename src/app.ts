@@ -2,6 +2,7 @@ import { GUI } from "lil-gui";
 import Stats from "stats.js";
 import { Clock, Vector2 } from "three";
 
+import { createBoidScene } from "./boids/boidScene";
 import { createRaymarchScene } from "./playground/raymarchScene";
 import {
   createRenderer,
@@ -43,10 +44,17 @@ export const bootstrapApp = async ({ container }: AppOptions) => {
     canvas: renderer.domElement,
     pointer,
   });
+  const boidModule = createBoidScene({
+    gui,
+    canvas: renderer.domElement,
+    pointer,
+    renderer,
+  });
 
   const modules: Record<string, SceneModule> = {
     raymarch: raymarchModule,
     marching: marchingModule,
+    boids: boidModule,
   };
 
   let activeModule: SceneModule = raymarchModule;
@@ -69,8 +77,8 @@ export const bootstrapApp = async ({ container }: AppOptions) => {
 
   const render = () => {
     stats.begin();
-    const elapsed = clock.getElapsedTime();
     const delta = clock.getDelta();
+    const elapsed = clock.elapsedTime;
     activeModule.render({ renderer, delta, elapsed, pointer });
     stats.end();
   };
@@ -82,11 +90,17 @@ export const bootstrapApp = async ({ container }: AppOptions) => {
   resize();
 
   const modeFolder = gui.addFolder("Mode");
-  const state = { mode: "raymarch" } as { mode: "raymarch" | "marching" };
+  const state = {
+    mode: "raymarch",
+  } as { mode: "raymarch" | "marching" | "boids" };
   modeFolder
-    .add(state, "mode", { Raymarch: "raymarch", Marching: "marching" })
+    .add(state, "mode", {
+      Raymarch: "raymarch",
+      Marching: "marching",
+      Boids: "boids",
+    })
     .name("Render Mode")
-    .onChange((mode: "raymarch" | "marching") => {
+    .onChange((mode: "raymarch" | "marching" | "boids") => {
       activeModule.onDeactivate?.();
       activeModule = modules[mode];
       activeModule.onActivate?.();
